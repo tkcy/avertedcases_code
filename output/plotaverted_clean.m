@@ -1,0 +1,624 @@
+%% plotaverted.m produces paper figures
+clear; close all;
+
+%% for shaded plots
+addpath ~/Documents/MATLAB/kakearney-boundedline-pkg-50f7e4b/boundedline/
+addpath ~/Documents/MATLAB/kakearney-boundedline-pkg-50f7e4b/catuneven/
+addpath ~/Documents/MATLAB/kakearney-boundedline-pkg-50f7e4b/Inpaint_nans/
+addpath ~/Documents/MATLAB/kakearney-boundedline-pkg-50f7e4b/singlepatch/
+
+exportstylebigger=hgexport('readstyle','bigwide')
+exportstylebigger.Format='tiff';
+%% load some background things
+load ('../infer_and_projection/geomaps.mat');
+load('../infer_and_projection/population.mat');
+statepop=accumarray(countystatemap,population);
+statefips=readtable('../infer_and_projection/statefips.csv');
+statefips=statefips(:,[1:4 end-1:end]);
+statefips.population=statepop(statefips.fips);
+
+%% load the baseline and scenarios
+% these files are .8-5GB in size
+reloadrawoutput=0
+if reloadrawoutput==1
+    origrun=load('../output/baselinetemp/saveeverythingforpaper.mat','obs_case','obs_temp_start');
+    cf=load('../output/temp/counterfact.mat');
+    cfplus=load('../output/temp/counterfact_plus10.mat');
+    cfminus=load('../output/temp/counterfact_minus10.mat');
+end
+%% get truth
+load('../infer_and_projection/dailyincidence.mat');
+load('../infer_and_projection/statedeath.mat')
+statedeath(end+1,:)=sum(statedeath);
+for t=1:size(dailyincidence,2)
+    stateobstruth(:,t)=accumarray(countystatemap,dailyincidence(:,t));
+end
+stateobstruth=stateobstruth(statefips.fips,:); %trip extra rows
+stateobstruth(end+1,:)=squeeze(sum(stateobstruth,1));
+
+for i=1:51
+    stateobstruthpercap(i,:)=movmean(stateobstruth(i,:)/statefips.population(i),7);
+end
+stateobstruthpercap(52,:)=movmean(stateobstruth(52,:)/sum(statefips.population),7);
+
+
+
+
+%% stuff with dates
+startday='02/21/2020';
+if reloadrawoutput==1
+    numdays_cf=size(cf.obs_projnochange,3);
+    numdays_truth=size(cf.obs_case,2);
+    numdays_orig=size(origrun.obs_temp_start,3);
+else
+    numdays_cf=510
+    numdays_truth=468
+    numdays_orig=510
+end
+dates_cf= (datenum(startday)): (datenum(startday)+numdays_cf-1);
+dates_truth= (datenum(startday)): (datenum(startday)+numdays_truth-1);
+dates_orig= (datenum(startday)): (datenum(startday)+numdays_orig-1);
+dates_fromstartcf=dates_truth(299:end);
+dateshosp=datetime('01-Aug-2020'):datetime('01-Jul-2021');
+
+aind=299:length(dates_truth);
+
+%% get some stats
+if reloadrawoutput==1
+Sstartvax=load('temp/saveeverythingVax.mat','Sstate','S_start','E_start','Ir_start','Iu_start');
+Sstart=prctile(Sstartvax.Sstate,[50 2.5 97.5],2);
+Sstart=Sstart(Sstart(:,1)~=0,:);
+statefips.Sstart=Sstart(:,1)./statefips.population;
+
+tableSstart=[statefips.state_name, array2table(round(Sstart./repmat(statefips.population,1,3),2),...
+    'VariableNames', {'Sstart_50','Sstart_2.5','Sstart_97.5'})]
+
+
+% get initial S E I R at national level
+usSstart=round(sum(prctile(Sstartvax.S_start,[50 2.5 97.5],2))/sum(population)*100,1)
+usEstart=round(sum(prctile(Sstartvax.E_start,[50 2.5 97.5],2))/sum(population)*100,1)
+usIstart=round(sum(prctile(Sstartvax.Ir_start+Sstartvax.Iu_start,[50 2.5 97.5],2))/sum(population)*100,1)
+usRstart=[100 100 100] - usSstart-usEstart-usIstart
+end
+
+%%  Load hospitalization rate
+latesthosp=load('../infer_and_projection/hospdataAug2020.mat');
+nathospdata=squeeze(sum(latesthosp.hospdata,2));
+
+%% trim truths to correct time period
+
+lagtodeath=round(15.4+7-9);
+lagtohosp=4;
+
+indcasebefore=find(dateshosp<'15-Dec-2020');
+indcaseafter=find(dateshosp>='15-Dec-2020' & dateshosp <= '02-Jun-2021');
+
+hospdataBefore(:,1)=squeeze(sum(latesthosp.hospdata(indcasebefore+lagtohosp,:,1))); % hosps
+hospdataAfter(:,1)= squeeze(sum(latesthosp.hospdata(indcaseafter+lagtohosp,:,1)));
+
+hospdataBefore(:,2)=squeeze(sum(latesthosp.hospdata(indcasebefore,:,2))); % cases
+hospdataAfter(:,2)= squeeze(sum(latesthosp.hospdata(indcaseafter,:,2)));
+
+
+hospdataBefore(:,3)=squeeze(sum(latesthosp.hospdata(indcasebefore+lagtodeath,:,3)));%deaths
+hospdataAfter(:,3)= squeeze(sum(latesthosp.hospdata(indcaseafter+lagtodeath,:,3)));
+%% compute CHR and CFR and output to table
+
+chrtable=statefips(:,[1 4]);
+chrtable.CHR_pre=(hospdataBefore(:,1))./(hospdataBefore(:,2));
+chrtable.CHR_pre_lower=(hospdataBefore(:,1)-1.96*sqrt(hospdataBefore(:,1)))./(hospdataBefore(:,2));
+chrtable.CHR_pre_upper=(hospdataBefore(:,1)+1.96*sqrt(hospdataBefore(:,1)))./(hospdataBefore(:,2));
+chrtable.CHR_post=(hospdataAfter(:,1))./(hospdataAfter(:,2));
+chrtable.CHR_post_lower=(hospdataAfter(:,1)-1.96*sqrt(hospdataAfter(:,1)))./(hospdataAfter(:,2));
+chrtable.CHR_post_upper=(hospdataAfter(:,1)+1.96*sqrt(hospdataAfter(:,1)))./(hospdataAfter(:,2));
+
+
+cfrtable=statefips(:,[1 4]);
+cfrtable.CFR_pre=(hospdataBefore(:,3))./(hospdataBefore(:,2));
+cfrtable.CFR_pre_lower=(hospdataBefore(:,3)-1.96*sqrt(hospdataBefore(:,1)))./(hospdataBefore(:,2));
+cfrtable.CFR_pre_upper=(hospdataBefore(:,3)+1.96*sqrt(hospdataBefore(:,1)))./(hospdataBefore(:,2));
+cfrtable.CFR_post=(hospdataAfter(:,3))./(hospdataAfter(:,2));
+cfrtable.CFR_post_lower=(hospdataAfter(:,3)-1.96*sqrt(hospdataAfter(:,3)))./(hospdataAfter(:,2));
+cfrtable.CFR_post_upper=(hospdataAfter(:,3)+1.96*sqrt(hospdataAfter(:,3)))./(hospdataAfter(:,2));
+
+
+statefips.CHR_pre=(hospdataBefore(:,1))./(hospdataBefore(:,2));
+statefips.CHR_post=(hospdataAfter(:,1))./(hospdataAfter(:,2));
+statefips.CFR_pre=(hospdataBefore(:,3))./(hospdataBefore(:,2));
+statefips.CFR_post=(hospdataAfter(:,3))./(hospdataAfter(:,2));
+
+% fill in national
+chrtable.state_name(52)={'United States'};
+chrtable.fips(52)=nan;
+chrtable.CHR_pre(52)=sum(hospdataBefore(:,1))./sum(hospdataBefore(:,2));
+chrtable.CHR_pre_lower(52)=chrtable.CHR_pre(52)-sqrt(sum(hospdataBefore(:,1)))*1.96/sum(hospdataBefore(:,2));
+chrtable.CHR_pre_upper(52)=chrtable.CHR_pre(52)+sqrt(sum(hospdataBefore(:,1)))*1.96/sum(hospdataBefore(:,2));
+chrtable.CHR_post(52)=sum(hospdataAfter(:,1))./sum(hospdataAfter(:,2));
+chrtable.CHR_post_lower(52)=chrtable.CHR_post(52)-sqrt(sum(hospdataAfter(:,1)))*1.96/sum(hospdataAfter(:,2));
+chrtable.CHR_post_upper(52)=chrtable.CHR_post(52)+sqrt(sum(hospdataAfter(:,1)))*1.96/sum(hospdataAfter(:,2));
+
+cfrtable.state_name(52)={'United States'};
+cfrtable.fips(52)=nan;
+cfrtable.CFR_pre(52)=sum(hospdataBefore(:,3))./sum(hospdataBefore(:,2));
+cfrtable.CFR_pre_lower(52)=cfrtable.CFR_pre(52)-sqrt(sum(hospdataBefore(:,3)))*1.96/sum(hospdataBefore(:,2));
+cfrtable.CFR_pre_upper(52)=cfrtable.CFR_pre(52)+sqrt(sum(hospdataBefore(:,3)))*1.96/sum(hospdataBefore(:,2));
+cfrtable.CFR_post(52)=sum(hospdataAfter(:,3))./sum(hospdataAfter(:,2));
+cfrtable.CFR_post_lower(52)=cfrtable.CFR_post(52)-sqrt(sum(hospdataAfter(:,3)))*1.96/sum(hospdataAfter(:,2));
+cfrtable.CFR_post_upper(52)=cfrtable.CFR_post(52)+sqrt(sum(hospdataAfter(:,3)))*1.96/sum(hospdataAfter(:,2));
+
+chrtable{:,3:end}=round(chrtable{:,3:end},4);
+cfrtable{:,3:end}=round(cfrtable{:,3:end},4);
+
+% writetable(chrtable,'CHRtable.xlsx' );
+% writetable(cfrtable,'CFRtable.xlsx');
+%% output a nicer table of CHR and CFR formatted with 95% CI
+
+nicerchrtable=chrtable(:,1);
+for i=1:52
+    nicerchrtable(i,2)={[num2str(chrtable.CHR_pre(i),'%.3f'), ' (',num2str(chrtable.CHR_pre_lower(i),'%.3f'),' , ',...
+        num2str(chrtable.CHR_pre_upper(i),'%.3f'),')']};
+    nicerchrtable(i,3)={[num2str(chrtable.CHR_post(i),'%.3f'), ' (',num2str(chrtable.CHR_post_lower(i),'%.3f'),' , ',...
+        num2str(chrtable.CHR_post_upper(i),'%.3f'),')']};
+    
+    nicerchrtable(i,4)={[num2str(cfrtable.CFR_pre(i),'%.3f'), ' (',num2str(cfrtable.CFR_pre_lower(i),'%.3f'),' , ',...
+        num2str(cfrtable.CFR_pre_upper(i),'%.3f'),')']};
+    nicerchrtable(i,5)={[num2str(cfrtable.CFR_post(i),'%.3f'), ' (',num2str(cfrtable.CFR_post_lower(i),'%.3f'),' , ',...
+        num2str(cfrtable.CFR_post_upper(i),'%.3f'),')']};
+    
+end
+nicerchrtable.Properties.VariableNames={'State','CHR 8/1/2020-12/14/2020','CHR 12/15/2020-06/02/2021',...
+    'CFR 8/1/2020-12/14/2020','CFR 12/15/2020-06/02/2021'  }
+% writetable(nicerchrtable,'~/Dropbox/Research/covid/caseaverted/SItable_chr_cfr.xlsx')
+%% random sample of chr and cfr
+drawagain=0
+if drawagain==1
+    chrnatvec=normrnd(sum(hospdataBefore(:,1)),sqrt(sum(hospdataBefore(:,1))),100,1)/...
+        sum(hospdataBefore(:,2));
+    cfrnatvec=normrnd(sum(hospdataBefore(:,3)),sqrt(sum(hospdataBefore(:,3))),100,1)/...
+        sum(hospdataBefore(:,2));
+    
+    save('randomdraw_for_chrcfr.mat','chrnatvec','cfrnatvec');
+else
+    load ('randomdraw_for_chrcfr.mat')
+end
+
+
+%% aggregate county results to state level
+% stateobsens (52 locations, 468 timesteps,100 ensemble members, 4
+% scenarios)
+if reloadrawoutput==1
+clear stateobsens
+for i=1:100
+    for t=1:numdays_cf - 42
+        stateobsens(:,t,i,1)=accumarray(countystatemap, cf.obs_projnochange(:,i,t));
+        stateobsens(:,t,i,2)=accumarray(countystatemap, cfplus.obs_projplus10(:,i,t));
+        stateobsens(:,t,i,3)=accumarray(countystatemap, cfminus.obs_projminus10(:,i,t));
+        stateobsens(:,t,i,4)=accumarray(countystatemap, origrun.obs_temp_start(:,i,t));
+    end
+end
+stateobsens=stateobsens(statefips.fips,:,:,:); %trip extra rows
+stateobsens(end+1,:,:,:)=squeeze(sum(stateobsens,1));
+
+
+stateobsensfull=stateobsens;
+
+
+save('stateobsensfull.mat','stateobsensfull');
+clear cf cfplus cfminus origrun
+else
+    load('stateobsensfull.mat')
+end
+% now trim to relevant time period
+stateobsens=stateobsensfull(:,aind,:,:);
+%% get percentages
+
+stateobscfpct=prctile(stateobsens,[50 2.5 97.5],3);
+
+%% sum averted
+% totcase: 51 states,3 percentiles, 4 scenarios
+totcase=prctile(squeeze(sum(stateobsens,2)),[50 2.5 97.5],2);
+
+
+% total national cases modeleed under the 3 scenarios: 100 esemble x 4
+% scenarios
+nattotcase_wholeensemble=squeeze(sum(stateobsens(end,:,:,:)));
+
+
+% mutliply by cfr and chr
+nattothosp_wholeensemble_baseline=nattotcase_wholeensemble(:,4).* chrnatvec;
+nattotdeath_wholeensemble_baseline=nattotcase_wholeensemble(:,4).* cfrnatvec;
+
+nattotcase_pct_after=prctile(nattotcase_wholeensemble,[50 2.5 97.5])
+nattothosp_pct_after=prctile(nattothosp_wholeensemble_baseline,[50 2.5 97.5])
+nattotdeath_pct_after=prctile(nattotdeath_wholeensemble_baseline,[50 2.5 97.5])
+
+
+for i=1:3
+    caseavert(:,:,i)=totcase(:,:,i)-totcase(:,:,4);
+    natcaseavert_wholeensemble(:,i)=nattotcase_wholeensemble(:,i)-nattotcase_wholeensemble(:,4);
+end
+
+
+% now averted hosps and deads
+for i=1:3
+    nathospavert_we(:,i)=   natcaseavert_wholeensemble(:,i).* chrnatvec;
+    natdeathavert_we(:,i)=   natcaseavert_wholeensemble(:,i).* cfrnatvec;
+end
+figure;
+subplot(1,3,1);
+hist(natcaseavert_wholeensemble)
+legend('nochange','+10','-10');xlabel('cases averted');ylabel('count');title('Histogram of averted cases')
+subplot(1,3,2);
+hist(nathospavert_we)
+legend('nochange','+10','-10');xlabel('hosps averted');ylabel('count');title('Histogram of averted hospitalizations')
+subplot(1,3,3);
+hist(natdeathavert_we)
+legend('nochange','+10','-10');xlabel('deaths averted');ylabel('count');title('Histogram of averted deaths')
+
+
+nca_pct=prctile(natcaseavert_wholeensemble,[50 2.5 97.5])
+nha_pct=prctile(nathospavert_we,[50 2.5 97.5])
+nda_pct=prctile(natdeathavert_we,[50 2.5 97.5])
+
+nca_pct_iq=prctile(natcaseavert_wholeensemble,[50 25 75])
+nha_pct_iq=prctile(nathospavert_we,[50 25 75])
+nda_pct_iq=prctile(natdeathavert_we,[50 25 75])
+
+
+%% compute the cost distribution using MD's table
+load('costvec.mat');
+
+
+for i=1:3
+    natcostsaved_we(:,i)=nathospavert_we(:,i).* costvec;
+end
+nhcs_pct=prctile(natcostsaved_we,[50 2.5 97.5])
+
+%% make table of baseline results
+rewritemanutable=0
+if rewritemanutable==1
+clear baselinetable
+baselinetable(1,1)={'Cases'};
+baselinetable(1,2)={[num2str(nattotcase_pct_after(1,4)/10^6,'%.1f'),' million ( 95% CI ',...
+    num2str(nattotcase_pct_after(2,4)/10^6,'%.1f'),' - ',num2str(nattotcase_pct_after(3,4)/10^6,'%.1f'),' million)']};
+
+baselinetable(2,1)={'Hospitalizations'};
+baselinetable(2,2)={[num2str(nattothosp_pct_after(1)/10^6,'%.1f'),' million ( 95% CI ',...
+    num2str(nattothosp_pct_after(2)/10^6,'%.1f'),' - ',num2str(nattothosp_pct_after(3)/10^6,'%.1f'),' million)']};
+
+baselinetable(3,1)={'Deaths'};
+baselinetable(3,2)={[num2str(nattotdeath_pct_after(1)/10^3,'%.1f'),' thousand ( 95% CI ',...
+    num2str(nattotdeath_pct_after(2)/10^3,'%.1f'),' - ',num2str(nattotdeath_pct_after(3)/10^3,'%.1f'),' thousand)']};
+
+baselinetable
+
+%% make the manuscript table
+
+clear manutable var_as_string manumatrix
+for scen=1:3
+    for i=1:3
+        var_as_string_case(i)={num2str(nca_pct(i,scen)/10^6,'%.1f')};
+        var_as_string_death(i)={num2str(nda_pct(i,scen)/10^3,'%.1f')};
+        var_as_string_hosp(i)={num2str(nha_pct(i,scen)/10^6,'%.1f')};
+        var_as_string_cost(i)={num2str(nhcs_pct(i,scen)/10^9,'%.1f')};
+    end
+    rowind=1;
+    manumatrix(rowind,scen)={ [var_as_string_case{1},' million']};
+    manumatrix(rowind+1,scen)={ ['(',var_as_string_case{2},' - ',var_as_string_case{3} ,' million)']};
+    
+    rowind=3;
+    manumatrix(rowind,scen)={ [var_as_string_death{1},' thousand']};
+    manumatrix(rowind+1,scen)={ ['(',var_as_string_death{2},' - ',var_as_string_death{3} ,' thousand']};
+    
+    rowind=5;
+    manumatrix(rowind,scen)={ [var_as_string_hosp{1},' million']};
+    manumatrix(rowind+1,scen)={ ['(',var_as_string_hosp{2},' - ',var_as_string_hosp{3} ,' million)']};
+    
+    rowind=7;
+    manumatrix(rowind,scen)={ ['$',var_as_string_cost{1},' billion']};
+    manumatrix(rowind+1,scen)={ ['($',var_as_string_cost{2},' - ',var_as_string_cost{3} ,' billion)']};
+end
+
+
+myrownames={'Cases averted','median, (95% CI)','Deaths averted','median, (95% CI)','Hospitalizations averted',...
+    'median, (95% CI)','Hospitalization cost savings','median, (95% CI)'}';
+
+manutable=cell2table([myrownames manumatrix],'VariableNames',{' ','Scenario 1','Scenario 2','Scenario 3'})
+writetable(manutable,'~/Dropbox/Research/covid/caseaverted/manutable.xlsx')
+end
+%% per cap
+if reloadrawoutput==1
+temppopmat=repmat(statefips.population,1,3,4);
+temppopmat(end+1,:,:)=squeeze(sum(temppopmat));
+
+totcasepercap=totcase./temppopmat*100000;
+caseavertpercap=caseavert./temppopmat(:,:,1:3)*100000;
+%% add medians to spreadsheet
+statefips.caseavertpercapnc=caseavertpercap(1:51,1,1);
+statefips.caseavertpercapplus=caseavertpercap(1:51,1,2);
+statefips.caseavertpercapminus=caseavertpercap(1:51,1,3);
+statefips.totcasepercap_post=totcasepercap(1:51,1,4);
+
+load('../output/baselinetemp/saveeverythingforpaper.mat','totalvaxperloc')
+temp=accumarray(subpopstatemap,totalvaxperloc);
+statefips.maybevax=temp(statefips.fips);
+statefips.vaxrate=statefips.maybevax./statefips.population;
+
+
+%% new deaths and hosps averted calc using delta times chr / cfr
+statefips.deathavertpercapnc=statefips.caseavertpercapnc.*statefips.CFR_pre;
+statefips.deathavertpercapplus=statefips.caseavertpercapplus.*statefips.CFR_pre;
+statefips.deathavertpercapminus=statefips.caseavertpercapminus.*statefips.CFR_pre;
+
+statefips.hospavertpercapnc=statefips.caseavertpercapnc.*statefips.CHR_pre;
+statefips.hospavertpercapplus=statefips.caseavertpercapplus.*statefips.CHR_pre;
+statefips.hospavertpercapminus=statefips.caseavertpercapminus.*statefips.CHR_pre;
+
+end
+
+
+%% national trajectories with uncertainty bounds
+scennames={'no change','plus 10%','minus 10%'}
+figure;
+for s=1:3
+    subplot(3,1,s)
+    
+    legend('no vax','no vax + 10%','no vax - 10%','baseline')
+    
+    
+    clear b1
+    b1(:,:,1,:)=squeeze(stateobscfpct(:,:,1,:)-stateobscfpct(:,:,2,:)); % lower bound
+    b1(:,:,2,:)=squeeze(stateobscfpct(:,:,3,:)-stateobscfpct(:,:,1,:)); % upper bound
+    %     b1(:,1:299,:,:)=0;
+    
+    hold all;plot( dates_truth,movmean(sum(dailyincidence),[6 0]),'k','LineWidth',2);
+    boundedline(dates_truth(299:end), squeeze(stateobscfpct(end,:,1,s)),squeeze(b1(end,:,:,s)),'alpha');
+    datetick
+    
+    xlim([ dates_truth(1)  dates_truth(end)])
+    ylabel('reported cases');
+    title(scennames{s});
+    if s==1
+        legend('observed cases','counterfactual 95% CI','counterfactual median','Location','northwest')
+    else
+        legend off
+    end
+end
+% hgexport(gcf,'~/Dropbox/Research/covid/caseaverted/paperfigures/figure2_casetraj.tiff' ,exportstylebigger)
+
+
+
+%%
+if reloadrawoutput==1
+load('../output/baselinetemp/saveeverythingforpaper.mat' ,'para_post','betamap','alphamaps','num_ens');
+%%  Rt timeseries
+for tt=1:171
+    for j=1:num_ens
+        % blah.S(:,ee)=accumarray(subpopcountymap,S(:,ee));
+        mbeta=para_post(betamap,:,tt);
+        malpha=para_post(alphamaps,:,tt);
+        mD=para_post(2,:,tt);
+        mmu=para_post(3,:,tt);
+        R0(:,j,tt)=median(mbeta(:,j).*mD(j).*(malpha(:,j)+(1-malpha(:,j)).*mmu(j)),2);
+    end
+end
+
+
+%
+load('../infer_and_projection/geomaps.mat');
+load('../infer_and_projection/countyfips.mat');
+load('../infer_and_projection/population.mat');
+
+% get state level R0 by taking popuulatoin weighted avg
+for tt=1:171
+    for j=1:num_ens
+        for s=unique(countystatemap)';
+            stateR0(s,j,tt)=sum(R0(countystatemap==s,j,tt).*...
+                population(countystatemap==s)/sum(population(countystatemap==s)));
+            
+        end
+        stateR0(s+1,j,tt)=sum(R0(:,j,tt).*...
+            population/sum(population));
+    end
+end
+
+stateR0=stateR0([statefips.fips; 57],:,:);
+stateR0pct=prctile(stateR0,[50 2.5 97.5],2);
+Rttable=statefips(:,1:4);
+Rttable.Rt_50=round(stateR0pct(1:51,1),2);
+Rttable.Rt_2_5=round(stateR0pct(1:51,2),2);
+Rttable.Rt_97_5=round(stateR0pct(1:51,3),2);
+
+statefips.Rtstart=round(stateR0pct(1:end-1,1),1);
+writetable(statefips,'updatestatefips.csv')
+save('stateR0pct.mat','stateR0pct')
+else
+    load('stateR0pct.mat');
+    statefips=readtable('updatestatefips.csv');
+end
+%%
+
+%% for figures, take out DC
+statefipsnoDC=statefips(statefips.fips~=11,:) ;
+%% Figure: Cases adn Rt over time
+figure;
+subplot(2,1,1)
+plot(dates_fromstartcf,  stateobstruthpercap(1:51,299:end)*100000,'color','#a4c2f4'); hold all;
+plot(dates_fromstartcf,  stateobstruthpercap(52,299:end)*100000,'k','LineWidth',1);
+ylabel('daily cases per 100,000')
+datetick;
+xlim([dates_fromstartcf(1) dates_fromstartcf(end) ])
+
+subplot(2,1,2);
+plot(dates_fromstartcf,squeeze(stateR0pct(1:51,1,1:170)),'color','#a4c2f4');hold all;
+plot(dates_fromstartcf,  squeeze(stateR0pct(52,1,1:170)),'k','LineWidth',1);
+datetick;
+xlim([dates_fromstartcf(1) dates_fromstartcf(end) ])
+ylabel('Rt')
+
+% hgexport(gcf,'~/Dropbox/Research/covid/caseaverted/paperfigures/Rt_over_time.tiff' ,exportstylebigger)
+ 
+
+
+%% S initila vs caseaverted as subplots
+figure;
+
+t=tiledlayout(2,2)
+nexttile
+scatter(statefipsnoDC.Sstart,statefipsnoDC.caseavertpercapnc,...
+    50,statefipsnoDC.vaxrate*100 ,'filled')
+lsline;
+colorbar
+
+
+xlabel('fraction S Dec 14, 2020');
+ylabel('cases averted per 100,000')
+
+
+nexttile
+scatter(statefipsnoDC.Sstart,statefipsnoDC.hospavertpercapnc , ...
+    50,statefipsnoDC.vaxrate*100 ,'filled')
+lsline;
+colorbar
+xlabel('fraction S Dec 14, 2020');
+ylabel('hospitalizations averted per 100,000')
+
+
+nexttile
+scatter(statefipsnoDC.Sstart,statefipsnoDC.deathavertpercapnc ,...
+    50,statefipsnoDC.vaxrate*100 ,'filled')
+lsline;
+colorbar
+
+xlabel('fraction S Dec 14, 2020');
+ylabel('deaths averted per 100,000')
+
+% hgexport(gcf,'~/Dropbox/Research/covid/caseaverted/paperfigures/fig3_scatter_vsS.tiff' ,exportstylebigger)
+
+%% Rt initial vs averted
+plotme=0
+if plotme==1
+    figure;
+    %  subplot(1,3,1)
+    t=tiledlayout(2,3)
+    % S
+    nexttile
+    scatter(statefipsnoDC.Sstart,statefipsnoDC.caseavertpercapnc,'filled');lsline;
+    xlabel('fraction S Dec 14, 2020');
+    ylabel('cases averted per 100,000')
+    
+    nexttile
+    scatter(statefipsnoDC.Sstart,statefipsnoDC.hospavertpercapnc ,'filled');lsline;
+    xlabel('fraction S Dec 14, 2020');
+    ylabel('hospitalizations averted per 100,000')
+    
+    nexttile
+    scatter(statefipsnoDC.Sstart,statefipsnoDC.deathavertpercapnc ,'filled');lsline;
+    xlabel('fraction S Dec 14, 2020');
+    ylabel('deaths averted per 100,000')
+    
+    % vax
+    nexttile
+    scatter(statefipsnoDC.vaxrate,statefipsnoDC.caseavertpercapnc,'filled');lsline;
+    xlabel('fraction vaccinated');
+    ylabel('cases averted per 100,000')
+    
+    nexttile
+    scatter(statefipsnoDC.vaxrate,statefipsnoDC.hospavertpercapnc ,'filled');lsline;
+    xlabel('fraction vaccinated');
+    ylabel('hospitalizations averted per 100,000')
+    
+    
+    nexttile
+    scatter(statefipsnoDC.vaxrate,statefipsnoDC.deathavertpercapnc ,'filled');lsline;
+    xlabel('fraction vaccinated');
+    ylabel('deaths averted per 100,000')
+    
+    
+    %     hgexport(gcf,'~/Dropbox/Research/covid/caseaverted/paperfigures/scatter6.tiff' ,exportstylebigger)
+end
+%% percent vax vs caseaverted as subplots
+figure;
+
+t=tiledlayout(2,2)
+nexttile
+scatter(statefipsnoDC.vaxrate ,statefipsnoDC.caseavertpercapnc,...
+    50, statefipsnoDC.Sstart,'filled')
+lsline;
+colorbar
+
+xlabel('fraction vaccinated');
+ylabel('cases averted per 100,000')
+
+nexttile
+scatter(statefipsnoDC.vaxrate ,statefipsnoDC.hospavertpercapnc,...
+    50, statefipsnoDC.Sstart,'filled')
+lsline;
+colorbar
+xlabel('fraction vaccinated');
+ylabel('hospitalizations averted per 100,000')
+
+nexttile
+scatter(statefipsnoDC.vaxrate ,statefipsnoDC.deathavertpercapnc,...
+    50, statefipsnoDC.Sstart,'filled')
+lsline;
+colorbar
+
+xlabel('fraction vaccinated');
+ylabel('deaths averted per 100,000')
+
+
+% hgexport(gcf,'~/Dropbox/Research/covid/caseaverted/paperfigures/fig3_scatter_vsVax.tiff' ,exportstylebigger)
+%%
+figure;
+
+t=tiledlayout(2,2)
+nexttile
+scatter(statefipsnoDC.vaxrate ,statefipsnoDC.caseavertpercapplus-statefipsnoDC.caseavertpercapnc,...
+    50, statefipsnoDC.Sstart,'filled')
+lsline;
+colorbar
+
+xlabel('fraction vaccinated');
+ylabel('cases averted per 100,000')
+
+nexttile
+scatter(statefipsnoDC.vaxrate ,statefipsnoDC.hospavertpercapplus-statefipsnoDC.hospavertpercapnc,...
+    50, statefipsnoDC.Sstart,'filled')
+lsline;
+colorbar
+xlabel('fraction vaccinated');
+ylabel('hospitalizations averted per 100,000')
+
+nexttile
+scatter(statefipsnoDC.vaxrate ,statefipsnoDC.deathavertpercapplus-statefipsnoDC.deathavertpercapnc,...
+    50, statefipsnoDC.Sstart,'filled')
+lsline;
+colorbar
+
+xlabel('fraction vaccinated');
+ylabel('deaths averted per 100,000')
+
+  
+%% figure of baseline fits are made in cases_averted_Pfizer.m
+figure;
+t=tiledlayout(10,5);
+for i=[1:10 12:51]
+    nexttile
+    %         plot(dates_orig,squeeze(stateobsens(i,:,:,4)),'r');hold all;
+    %         plot(dates_truth,movmean(stateobstruth(i,:),[6 0]),'k','LineWidth',1)
+    %
+    plot( squeeze(stateobsensfull(i,:,:,4)),'r');hold all;
+    plot( movmean(stateobstruth(i,:),[6 0]),'k','LineWidth',1)
+    
+    title(statefips.state_abbr{i})
+    axis('tight')
+    set(gca,'XTick',[10 468],'XTickLabel' ,{'03/20','06/21'},'XTickLabelRotation',0)
+    %     set(gca, 'xticks',([      737851     738128 dates_truth(end)],'xticklabels',...
+    %         ({'03/20' ,'12/20','6/21'})
+    
+    
+end
+
+ylabel(t,'Reported Covid-19 Cases');%xlabel(t,'day');
+hgexport(gcf,'~/Dropbox/Research/covid/caseaverted/paperfigures/vaxratebystate.tiff')
